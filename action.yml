@@ -1,36 +1,121 @@
-name: "Github Release Create"
-description: "A simple GitHub Action that prints a greeting"
+name: "GitHub Release Create"
+description: "Create a GitHub release with Docker image digest artifact"
 author: "Jimmie Fulton <jimmie.fulton@gmail.com>"
 
 # Define the inputs for this action
 inputs:
-  who-to-greet:
-    description: "Who to greet"
+  tag:
+    description: "Git tag for the release"
     required: true
-    default: "World"
-  message:
-    description: "Custom message to include"
+  name:
+    description: "Release name/title"
     required: false
-    default: "Hello"
+    default: ""
+  digest:
+    description: "Docker image digest to include as artifact"
+    required: true
+  make-latest:
+    description: "Mark this release as the latest"
+    required: false
+    default: "true"
+  generate-notes:
+    description: "Automatically generate release notes from commits"
+    required: false
+    default: "true"
+  body:
+    description: "Additional release body content (appended after auto-generated notes)"
+    required: false
+    default: ""
+  artifacts:
+    description: "Additional artifact files to attach (comma-separated paths)"
+    required: false
+    default: ""
+  remove-artifacts:
+    description: "Remove old artifacts before uploading new ones"
+    required: false
+    default: "true"
 
 # Define the outputs for this action
 outputs:
-  time:
-    description: "The time we greeted you"
-    value: ${{ steps.hello.outputs.time }}
+  release-id:
+    description: "The ID of the created release"
+    value: ${{ steps.create-release.outputs.id }}
+  release-url:
+    description: "The URL of the created release"
+    value: ${{ steps.create-release.outputs.html_url }}
+  digest-artifact:
+    description: "Path to the digest artifact file"
+    value: "digest.txt"
 
 # Define the runs configuration
 runs:
   using: "composite"
   steps:
-    - name: Hello step
-      id: hello
+    - name: Create digest artifact
+      id: digest-artifact
       shell: bash
       run: |
-        echo "${{ inputs.message }}, ${{ inputs.who-to-greet }}!"
-        echo "time=$(date)" >> $GITHUB_OUTPUT
+        echo '${{ inputs.digest }}' | tee digest.txt
+        echo "Created digest.txt with content: ${{ inputs.digest }}"
+
+    - name: Prepare release body
+      id: prepare-body
+      shell: bash
+      run: |
+        # Create the body content
+        BODY_FILE="${RUNNER_TEMP}/release_body.md"
+
+        # Add the custom body content if provided
+        if [ -n "${{ inputs.body }}" ]; then
+          echo "${{ inputs.body }}" > "${BODY_FILE}"
+        else
+          # Default body with digest information
+          echo "Docker image digest: \`${{ inputs.digest }}\`" > "${BODY_FILE}"
+        fi
+
+        echo "body-file=${BODY_FILE}" >> $GITHUB_OUTPUT
+
+    - name: Prepare artifact list
+      id: prepare-artifacts
+      shell: bash
+      run: |
+        # Always include digest.txt
+        ARTIFACT_LIST="digest.txt"
+
+        # Add additional artifacts if provided
+        if [ -n "${{ inputs.artifacts }}" ]; then
+          ARTIFACT_LIST="${ARTIFACT_LIST},${{ inputs.artifacts }}"
+        fi
+
+        echo "artifact-list=${ARTIFACT_LIST}" >> $GITHUB_OUTPUT
+        echo "Artifacts to upload: ${ARTIFACT_LIST}"
+
+    - name: Determine release name
+      id: release-name
+      shell: bash
+      run: |
+        if [ -n "${{ inputs.name }}" ]; then
+          echo "name=${{ inputs.name }}" >> $GITHUB_OUTPUT
+        else
+          # Extract version from tag (remove 'v' prefix if present)
+          VERSION="${{ inputs.tag }}"
+          VERSION="${VERSION#v}"
+          echo "name=Version ${VERSION}" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Create GitHub Release
+      id: create-release
+      uses: ncipollo/release-action@v1
+      with:
+        tag: ${{ inputs.tag }}
+        name: ${{ steps.release-name.outputs.name }}
+        makeLatest: ${{ inputs.make-latest }}
+        artifacts: ${{ steps.prepare-artifacts.outputs.artifact-list }}
+        removeArtifacts: ${{ inputs.remove-artifacts }}
+        generateReleaseNotes: ${{ inputs.generate-notes }}
+        bodyFile: ${{ steps.prepare-body.outputs.body-file }}
 
 # Define the branding for the action in the GitHub Marketplace
 branding:
-  icon: "award"
+  icon: "package"
   color: "blue"
